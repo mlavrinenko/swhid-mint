@@ -3,7 +3,7 @@ members = [] # Add sub-crate paths here as the project grows
 
 [package]
 name = "swhid-mint"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 rust-version = "1.85"
 description = "Mint and resolve Software Heritage identifiers (SWHID, ISO/IEC 18670:2025). VCS-agnostic core; a git backend derives ids via gix"

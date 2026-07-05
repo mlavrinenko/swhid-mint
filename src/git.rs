@@ -46,22 +46,23 @@ fn git_err(err: impl std::fmt::Display) -> Error {
 
 /// Mint a revision-scoped SWHID for `path` (repository-relative): its last-touch
 /// commit, qualified by path. Verifies the working-tree blob still equals the
-/// blob recorded at that commit, so the id recovers the same bytes.
+/// blob recorded at `HEAD`, so the id recovers the same bytes.
 ///
 /// # Errors
-/// [`Error::NotTracked`] when no commit touches the path, [`Error::Dirty`] when
-/// the working tree diverges from the recorded blob, [`Error::Git`] on any git
-/// failure.
+/// [`Error::NotTracked`] when `HEAD` has no entry for the path, [`Error::Dirty`]
+/// when the working tree diverges from `HEAD`'s recorded blob, [`Error::Git`] on
+/// any git failure.
 pub fn mint_rev_path(root: &Path, path: &str) -> Result<Swhid, Error> {
     let repo = gix::discover(root).map_err(git_err)?;
-    let commit =
-        last_touch_commit(&repo, path)?.ok_or_else(|| Error::NotTracked(path.to_owned()))?;
+    let head = repo.head_commit().map_err(git_err)?;
+    let head_blob =
+        entry_oid(&repo, head.id, path)?.ok_or_else(|| Error::NotTracked(path.to_owned()))?;
     let working = working_blob_id(&repo, root, path)?;
-    let recorded =
-        entry_oid(&repo, commit, path)?.ok_or_else(|| Error::NotTracked(path.to_owned()))?;
-    if working != recorded {
+    if working != head_blob {
         return Err(Error::Dirty(path.to_owned()));
     }
+    let commit = last_touch_commit(&repo, path, head_blob)?
+        .ok_or_else(|| Error::NotTracked(path.to_owned()))?;
     Ok(Swhid {
         kind: Kind::Revision,
         hash: commit.to_hex().to_string(),
@@ -107,18 +108,29 @@ fn working_blob_id(repo: &gix::Repository, root: &Path, path: &str) -> Result<Ob
     gix::objs::compute_hash(repo.object_hash(), gix::object::Kind::Blob, &data).map_err(git_err)
 }
 
-/// The newest commit reachable from `HEAD` whose blob at `path` differs from its
-/// first parent's (or that introduces the path) — the last-touch commit. `None`
-/// when no reachable commit contains the path.
-fn last_touch_commit(repo: &gix::Repository, path: &str) -> Result<Option<ObjectId>, Error> {
+/// The commit reachable from `HEAD` that introduced `target_blob` at `path` —
+/// its blob matches `target_blob` while its first parent's does not (or it has
+/// no parent). `None` when no reachable commit matches.
+///
+/// `gix`'s ancestor walk defaults to [`Sorting::BreadthFirst`], which orders by
+/// graph distance rather than history: in a diamond, a stale-content commit
+/// reachable via a short merge-side route can be visited before the commit that
+/// actually last set `path`'s content. Gating on `target_blob` (`HEAD`'s current
+/// blob, already confirmed clean by the caller) rather than "any change" makes
+/// the search immune to that ordering — a distance-nearer commit with a
+/// different blob is skipped, not returned.
+fn last_touch_commit(
+    repo: &gix::Repository,
+    path: &str,
+    target_blob: ObjectId,
+) -> Result<Option<ObjectId>, Error> {
     let head = repo.head_commit().map_err(git_err)?;
     for info in head.ancestors().all().map_err(git_err)? {
         let info = info.map_err(git_err)?;
-        let cur = entry_oid(repo, info.id, path)?;
-        let Some(cur) = cur else {
+        let Some(cur) = entry_oid(repo, info.id, path)? else {
             continue;
         };
-        if touched_here(repo, &info, path, cur)? {
+        if cur == target_blob && touched_here(repo, &info, path, cur)? {
             return Ok(Some(info.id));
         }
     }

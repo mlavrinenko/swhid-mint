@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-07-06
+
+### Fixed
+
+- `mint_rev_path`: the last-touch commit search relied on `gix`'s default
+  breadth-first ancestor walk, which orders by graph distance rather than
+  history. In a diamond (two merged branches where the file's true last change
+  sits further from `HEAD` than a stale copy reachable via the other parent),
+  the walk could return the stale commit's blob and falsely report a clean
+  working tree as `Dirty`. The dirty check now compares the working blob
+  directly against `HEAD`'s recorded blob (matching `git status` semantics),
+  and the last-touch search is anchored to that confirmed-current blob instead
+  of walk order, so it is immune to traversal ordering.
+
 ## [0.1.0] - 2026-07-05
 
 ### Added
